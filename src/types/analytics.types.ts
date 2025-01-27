@@ -2,47 +2,49 @@ export interface MembershipMetrics {
   totalMembers: number;
   activeMembers: number;
   newMembersThisMonth: number;
-  membershipsByType: {
-    type: string;
-    count: number;
-  }[];
   retentionRate: number;
+  membershipsByType: Array<{
+    date: string;
+    corporate: number;
+    single: number;
+    couple: number;
+  }>;
 }
 
 export interface AttendanceMetrics {
   dailyAverage: number;
-  peakHours: {
+  peakHours: Array<{
     hour: number;
     count: number;
-  }[];
-  classAttendance: {
+  }>;
+  classAttendance: Array<{
     className: string;
     attendance: number;
-  }[];
-  monthlyTrend: {
+  }>;
+  monthlyTrend: Array<{
     month: string;
-    visits: number;
-  }[];
+    attendance: number;
+  }>;
 }
 
 export interface RevenueMetrics {
   totalRevenue: number;
-  revenueByType: {
-    type: string;
-    amount: number;
-  }[];
   monthlyRecurring: number;
   outstandingPayments: number;
+  revenueByPeriod: Array<{
+    date: string;
+    corporate: number;
+    single: number;
+    couple: number;
+  }>;
 }
 
 export interface PassUsageMetrics {
-  activeDayPasses: number;
-  activeTenDayPasses: number;
-  usageByDay: {
-    date: string;
-    dayPasses: number;
-    tenDayPasses: number;
-  }[];
-  totalRevenue: number;
-  averageUsageRate: number;
+  totalPasses: number;
+  activePasses: number;
+  averageUsagePerWeek: number;
+  usageByType: Array<{
+    type: string;
+    count: number;
+  }>;
 }

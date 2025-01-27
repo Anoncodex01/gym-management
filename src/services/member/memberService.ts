@@ -1,9 +1,12 @@
 import { Member } from '../../types/member.types';
 import { supabase } from '../supabaseClient';
 import { toast } from 'react-hot-toast';
+import { v4 as uuidv4 } from 'uuid';
 
 export const memberService = {
   uploadProfileImage: async (file: File, memberId: string): Promise<string> => {
+    const BUCKET_NAME = 'profile-images';
+    
     if (!file.type.startsWith('image/')) {
       throw new Error('Only image files are allowed');
     }
@@ -12,27 +15,106 @@ export const memberService = {
       throw new Error('File size must be less than 5MB');
     }
 
-    const fileExt = file.name.split('.').pop();
-    const fileName = `${memberId}.${fileExt}`;
-    const filePath = `${memberId}/${fileName}`;
+    try {
+      // Check if user is authenticated
+      const { data: { session }, error: authError } = await supabase.auth.getSession();
+      if (authError || !session) {
+        console.error('Authentication error:', authError);
+        throw new Error('You must be authenticated to upload images');
+      }
 
-    const { error: uploadError, data } = await supabase.storage
-      .from('profile-images')
-      .upload(filePath, file, {
-        upsert: true,
-        contentType: file.type,
-      });
+      // Generate a unique filename using UUID
+      const fileExt = file.name.split('.').pop();
+      const uniqueId = uuidv4();
+      let filePath = `${memberId}/${uniqueId}.${fileExt}`;
 
-    if (uploadError) {
-      console.error('Error uploading image:', uploadError);
-      throw new Error('Failed to upload profile image');
+      // First, check if there's an existing image and delete it
+      const { data: existingFiles, error: listError } = await supabase.storage
+        .from(BUCKET_NAME)
+        .list(memberId);
+
+      if (listError) {
+        console.error('Error listing existing files:', listError);
+        // Don't throw here, just continue with the upload
+      }
+
+      if (existingFiles && existingFiles.length > 0) {
+        try {
+          await Promise.all(
+            existingFiles.map(file => 
+              supabase.storage
+                .from(BUCKET_NAME)
+                .remove([`${memberId}/${file.name}`])
+            )
+          );
+        } catch (removeError) {
+          console.error('Error removing existing files:', removeError);
+          // Don't throw here, just continue with the upload
+        }
+      }
+
+      // Upload the new image
+      const { error: uploadError } = await supabase.storage
+        .from(BUCKET_NAME)
+        .upload(filePath, file, {
+          cacheControl: '3600',
+          upsert: true,
+          contentType: file.type,
+        });
+
+      if (uploadError) {
+        console.error('Error uploading image:', uploadError);
+        if (uploadError.message.includes('duplicate')) {
+          // If it's a duplicate error, try with a new UUID
+          const newUniqueId = uuidv4();
+          filePath = `${memberId}/${newUniqueId}.${fileExt}`;
+          const { error: retryError } = await supabase.storage
+            .from(BUCKET_NAME)
+            .upload(filePath, file, {
+              cacheControl: '3600',
+              upsert: true,
+              contentType: file.type,
+            });
+
+          if (retryError) {
+            console.error('Error on retry upload:', retryError);
+            throw new Error('Failed to upload profile image after retry');
+          }
+        } else {
+          throw new Error('Failed to upload profile image: ' + uploadError.message);
+        }
+      }
+
+      // Get the public URL
+      const { data: { publicUrl } } = supabase.storage
+        .from(BUCKET_NAME)
+        .getPublicUrl(filePath);
+
+      if (!publicUrl) {
+        throw new Error('Failed to get public URL for uploaded image');
+      }
+
+      // Update the member's profile_image field in the database
+      const { error: updateError } = await supabase
+        .from('members')
+        .update({ profile_image: publicUrl })
+        .eq('id', memberId);
+
+      if (updateError) {
+        console.error('Error updating profile image URL:', updateError);
+        throw new Error('Failed to update profile image URL');
+      }
+
+      return publicUrl;
+    } catch (error) {
+      console.error('Error in uploadProfileImage:', error);
+      // Re-throw with a more user-friendly message
+      if (error instanceof Error) {
+        throw error;
+      } else {
+        throw new Error('Failed to upload profile image');
+      }
     }
-
-    const { data: { publicUrl } } = supabase.storage
-      .from('profile-images')
-      .getPublicUrl(filePath);
-
-    return publicUrl;
   },
 
   createMember: async (memberData: Omit<Member, 'id' | 'registrationDate' | 'status'>): Promise<Member> => {
@@ -137,9 +219,9 @@ export const memberService = {
         hasInsurance: data.has_insurance,
         registrationDate: data.registration_date,
         status: data.status,
-        gender: data.gender,
+        gender: data.gender || undefined,
         birthDate: data.birth_date ? new Date(data.birth_date).toISOString() : undefined,
-        address: data.address,
+        address: data.address || undefined,
         insuranceProvider: data.insurance_provider || undefined,
         insuranceMemberId: data.insurance_member_id || undefined,
         companyName: data.company_name || undefined,
@@ -215,7 +297,9 @@ export const memberService = {
       return null;
     }
 
-    return data ? {
+    if (!data) return null;
+
+    return {
       id: data.id,
       fullName: data.full_name,
       email: data.email,
@@ -224,15 +308,15 @@ export const memberService = {
       hasInsurance: data.has_insurance,
       registrationDate: new Date(data.registration_date).toISOString(),
       status: data.status,
-      gender: data.gender,
-      birthDate: data.birth_date ? new Date(data.birth_date).toISOString() : null,
-      address: data.address,
+      gender: data.gender || undefined,
+      birthDate: data.birth_date ? new Date(data.birth_date).toISOString() : undefined,
+      address: data.address || undefined,
       insuranceProvider: data.insurance_provider || undefined,
       insuranceMemberId: data.insurance_member_id || undefined,
       companyName: data.company_name || undefined,
-      profileImageUrl: data.profile_image,
+      profileImageUrl: data.profile_image || undefined,
       subscription: data.subscription
-    } : null;
+    };
   },
 
   getAllMembers: async (): Promise<Member[]> => {

@@ -1,6 +1,6 @@
 import { MembershipMetrics, AttendanceMetrics, RevenueMetrics, PassUsageMetrics } from '../../types/analytics.types';
 import { supabase } from '../supabaseClient';
-import { startOfMonth, endOfMonth, format } from 'date-fns';
+import { startOfMonth, endOfMonth, format, eachDayOfInterval, parseISO } from 'date-fns';
 
 export const analyticsService = {
   getMembershipMetrics: async (startDate: Date, endDate: Date): Promise<MembershipMetrics> => {
@@ -11,7 +11,7 @@ export const analyticsService = {
         .select('*');
 
       if (totalError) throw totalError;
-      const totalMembers = totalMembersData.length;
+      const totalMembers = totalMembersData?.length || 0;
 
       // Get active members
       const { data: activeMembersData, error: activeError } = await supabase
@@ -20,7 +20,7 @@ export const analyticsService = {
         .eq('status', 'active');
 
       if (activeError) throw activeError;
-      const activeMembers = activeMembersData.length;
+      const activeMembers = activeMembersData?.length || 0;
 
       // Get new members this month
       const { data: newMembersData, error: newError } = await supabase
@@ -30,41 +30,45 @@ export const analyticsService = {
         .lte('registration_date', endOfMonth(new Date()).toISOString());
 
       if (newError) throw newError;
-      const newMembersThisMonth = newMembersData.length;
+      const newMembersThisMonth = newMembersData?.length || 0;
 
-      // Get membership distribution
-      const { data: membershipsByType, error: membershipError } = await supabase
+      // Get daily membership data for the period
+      const { data: membershipData, error: membershipError } = await supabase
         .from('members')
-        .select('membership_type')
-        .eq('status', 'active');
+        .select('id, membership_type, registration_date')
+        .gte('registration_date', startDate.toISOString())
+        .lte('registration_date', endDate.toISOString());
 
       if (membershipError) throw membershipError;
-      if (!membershipsByType) return {
-        totalMembers: 0,
-        activeMembers: 0,
-        newMembersThisMonth: 0,
-        membershipsByType: [],
-        retentionRate: 0
-      };
 
-      const membershipDistribution = membershipsByType?.reduce((acc: any[], member) => {
-        const existingType = acc.find(m => m.type === member.membership_type);
-        if (existingType) {
-          existingType.count++;
-        } else {
-          acc.push({ type: member.membership_type, count: 1 });
-        }
-        return acc;
-      }, []) || [];
+      // Create daily distribution
+      const days = eachDayOfInterval({ start: startDate, end: endDate });
+      const membershipsByType = days.map(date => {
+        const dateStr = format(date, 'yyyy-MM-dd');
+        const membersUntilDate = membershipData?.filter(m => 
+          format(parseISO(m.registration_date), 'yyyy-MM-dd') <= dateStr
+        ) || [];
+
+        const corporate = membersUntilDate.filter(m => m.membership_type === 'corporate').length;
+        const single = membersUntilDate.filter(m => m.membership_type === 'single').length;
+        const couple = membersUntilDate.filter(m => m.membership_type === 'couple').length;
+
+        return {
+          date: dateStr,
+          corporate,
+          single,
+          couple
+        };
+      });
 
       // Calculate retention rate (simplified)
       const retentionRate = totalMembers ? Math.round((activeMembers / totalMembers) * 100) : 0;
 
       return {
-        totalMembers: totalMembers || 0,
-        activeMembers: activeMembers || 0,
-        newMembersThisMonth: newMembersThisMonth || 0,
-        membershipsByType: membershipDistribution || [],
+        totalMembers,
+        activeMembers,
+        newMembersThisMonth,
+        membershipsByType,
         retentionRate
       };
     } catch (error) {
@@ -101,180 +105,199 @@ export const analyticsService = {
       const dailyAverage = Math.round(attendanceRecords.length / totalDays);
 
       // Calculate peak hours
-      const peakHours = Array.from({ length: 24 }, (_, hour) => ({
-        hour,  
-        count: attendanceRecords.filter(record => 
-          new Date(record.check_in_time).getHours() === hour
-        ).length
-      }));
+      const hourlyDistribution = attendanceRecords.reduce((acc: { [key: number]: number }, record) => {
+        const hour = new Date(record.check_in_time).getHours();
+        acc[hour] = (acc[hour] || 0) + 1;
+        return acc;
+      }, {});
+
+      const peakHours = Object.entries(hourlyDistribution)
+        .map(([hour, count]) => ({
+          hour: parseInt(hour),
+          count
+        }))
+        .sort((a, b) => b.count - a.count)
+        .slice(0, 5);
 
       // Calculate class attendance
-      const { data: classAttendance } = await supabase
-        .from('member_attendance')
-        .select('*')
-        .eq('attendance_type', 'class')
-        .gte('check_in_time', startDate.toISOString())
-        .lte('check_in_time', endDate.toISOString());
+      const { data: classRecords, error: classError } = await supabase
+        .from('class_attendance')
+        .select('class_name')
+        .gte('date', startDate.toISOString())
+        .lte('date', endDate.toISOString());
 
-      const classStats = classAttendance?.reduce((acc: any[], record) => {
-        const className = record.notes?.replace('Class ID: ', '') || 'Unknown';
-        const existingClass = acc.find(c => c.className === className);
-        if (existingClass) {
-          existingClass.attendance++;
-        } else {
-          acc.push({ className, attendance: 1 });
-        }
+      if (classError) throw classError;
+
+      const classAttendance = (classRecords || []).reduce((acc: { [key: string]: number }, record) => {
+        acc[record.class_name] = (acc[record.class_name] || 0) + 1;
         return acc;
-      }, []) || [];
+      }, {});
+
+      const classAttendanceArray = Object.entries(classAttendance)
+        .map(([className, attendance]) => ({
+          className,
+          attendance
+        }))
+        .sort((a, b) => b.attendance - a.attendance);
 
       // Calculate monthly trend
-      const monthlyTrend = Array.from({ length: 6 }, (_, i) => {
-        const month = new Date();
-        month.setMonth(month.getMonth() - i);
-        const monthStart = startOfMonth(month);
-        const monthEnd = endOfMonth(month);
-        
-        return {
-          month: format(month, 'MMM'),
-          visits: attendanceRecords.filter(record =>
-            new Date(record.check_in_time) >= monthStart &&
-            new Date(record.check_in_time) <= monthEnd
-          ).length
-        };
-      }).reverse();
+      const monthlyAttendance = attendanceRecords.reduce((acc: { [key: string]: number }, record) => {
+        const month = format(new Date(record.check_in_time), 'MMM yyyy');
+        acc[month] = (acc[month] || 0) + 1;
+        return acc;
+      }, {});
+
+      const monthlyTrend = Object.entries(monthlyAttendance)
+        .map(([month, attendance]) => ({
+          month,
+          attendance // Changed from visits to attendance
+        }))
+        .sort((a, b) => new Date(a.month).getTime() - new Date(b.month).getTime());
 
       return {
         dailyAverage,
         peakHours,
-        classAttendance: classStats,
+        classAttendance: classAttendanceArray,
         monthlyTrend
       };
     } catch (error) {
       console.error('Failed to fetch attendance metrics:', error);
-      throw error;
+      return {
+        dailyAverage: 0,
+        peakHours: [],
+        classAttendance: [],
+        monthlyTrend: []
+      };
     }
   },
 
   getRevenueMetrics: async (startDate: Date, endDate: Date): Promise<RevenueMetrics> => {
     try {
-      // Get all active subscriptions
-      const { data: activeSubscriptions, error: subError } = await supabase
-        .from('members')
-        .select(`
-          subscription,
-          status
-        `)
+      // Get all payments for the period
+      const { data: payments, error: paymentsError } = await supabase
+        .from('payments')
+        .select('amount, payment_date, membership_type')
+        .gte('payment_date', startDate.toISOString())
+        .lte('payment_date', endDate.toISOString());
+
+      if (paymentsError) throw paymentsError;
+
+      // Calculate total revenue
+      const totalRevenue = payments?.reduce((sum, payment) => sum + payment.amount, 0) || 0;
+
+      // Get monthly recurring revenue (subscriptions only)
+      const { data: subscriptions, error: subscriptionsError } = await supabase
+        .from('subscriptions')
+        .select('amount')
         .eq('status', 'active');
 
-      if (subError) throw subError;
-      if (!activeSubscriptions) return {
-        totalRevenue: 0,
-        monthlyRecurring: 0,
-        outstandingPayments: 0,
-        revenueByType: []
-      };
+      if (subscriptionsError) throw subscriptionsError;
+      const monthlyRecurring = subscriptions?.reduce((sum, sub) => sum + sub.amount, 0) || 0;
 
-      // Calculate total revenue and monthly recurring
-      let totalRevenue = 0;
-      let monthlyRecurring = 0;
+      // Get outstanding payments
+      const { data: outstanding, error: outstandingError } = await supabase
+        .from('payments')
+        .select('amount')
+        .eq('status', 'pending');
 
-      if (activeSubscriptions) {
-        activeSubscriptions.forEach(member => {
-          if (member.subscription && typeof member.subscription === 'object') {
-            const amount = member.subscription.amount || 0;
-            totalRevenue += amount;
-            if (member.subscription.type === 'monthly') {
-              monthlyRecurring += amount;
-            }
-          }
-        });
-      }
+      if (outstandingError) throw outstandingError;
+      const outstandingPayments = outstanding?.reduce((sum, payment) => sum + payment.amount, 0) || 0;
 
-      // Get revenue by type
-      const revenueByType = [
-        { type: 'Memberships', amount: totalRevenue * 0.8 }, // 80% from memberships
-        { type: 'Classes', amount: totalRevenue * 0.1 },     // 10% from classes
-        { type: 'Passes', amount: totalRevenue * 0.1 }       // 10% from passes
-      ];
+      // Create daily revenue distribution
+      const days = eachDayOfInterval({ start: startDate, end: endDate });
+      const revenueByPeriod = days.map(date => {
+        const dateStr = format(date, 'yyyy-MM-dd');
+        const dayPayments = payments?.filter(p => 
+          format(parseISO(p.payment_date), 'yyyy-MM-dd') === dateStr
+        ) || [];
 
-      // Calculate outstanding payments
-      const { data: expiredSubscriptions, error: expiredError } = await supabase
-        .from('members')
-        .select(`
-          subscription
-        `)
-        .eq('status', 'active')
-        .not('subscription', 'is', null);
-
-      if (expiredError) {
-        throw expiredError;
-      }
-
-      const outstandingPayments = expiredSubscriptions?.reduce((total, member) =>
-        total + (member.subscription?.amount || 0), 0) || 0;
+        return {
+          date: dateStr,
+          corporate: dayPayments.filter(p => p.membership_type === 'corporate')
+            .reduce((sum, p) => sum + p.amount, 0),
+          single: dayPayments.filter(p => p.membership_type === 'single')
+            .reduce((sum, p) => sum + p.amount, 0),
+          couple: dayPayments.filter(p => p.membership_type === 'couple')
+            .reduce((sum, p) => sum + p.amount, 0)
+        };
+      });
 
       return {
         totalRevenue,
         monthlyRecurring,
         outstandingPayments,
-        revenueByType
+        revenueByPeriod
       };
     } catch (error) {
       console.error('Failed to fetch revenue metrics:', error);
-      throw error;
+      return {
+        totalRevenue: 0,
+        monthlyRecurring: 0,
+        outstandingPayments: 0,
+        revenueByPeriod: []
+      };
     }
   },
 
   getPassUsageMetrics: async (startDate: Date, endDate: Date): Promise<PassUsageMetrics> => {
     try {
-      // Get all attendance records for passes
-      const { data: passAttendance, error: passError } = await supabase
-        .from('member_attendance')
+      // Get all passes
+      const { data: passes, error: passError } = await supabase
+        .from('passes')
         .select('*')
-        .eq('attendance_type', 'gym')
-        .gte('check_in_time', startDate.toISOString())
-        .lte('check_in_time', endDate.toISOString());
+        .gte('created_at', startDate.toISOString())
+        .lte('created_at', endDate.toISOString());
 
       if (passError) throw passError;
-      if (!passAttendance) return {
-        activeDayPasses: 0,
-        activeTenDayPasses: 0,
-        usageByDay: [],
-        totalRevenue: 0,
-        averageUsageRate: 0
+      if (!passes) return {
+        totalPasses: 0,
+        activePasses: 0,
+        averageUsagePerWeek: 0,
+        usageByType: []
       };
-      // Calculate active passes (simplified)
-      const activeDayPasses = Math.round((passAttendance?.length || 0) * 0.3); // 30% day passes
-      const activeTenDayPasses = Math.round((passAttendance?.length || 0) * 0.7); // 70% 10-day passes
 
-      // Calculate usage by day
-      const usageByDay = Array.from({ length: 7 }, (_, i) => {
-        const date = new Date();
-        date.setDate(date.getDate() - i);
-        const dayPasses = Math.round((passAttendance?.filter(record =>
-          new Date(record.check_in_time).toDateString() === date.toDateString()
-        ).length || 0) * 0.3);
-        const tenDayPasses = Math.round((passAttendance?.filter(record =>
-          new Date(record.check_in_time).toDateString() === date.toDateString()
-        ).length || 0) * 0.7);
+      // Calculate total and active passes
+      const totalPasses = passes.length;
+      const activePasses = passes.filter(pass => pass.status === 'active').length;
 
-        return {
-          date: format(date, 'MMM d'),
-          dayPasses,
-          tenDayPasses
-        };
-      }).reverse();
+      // Calculate average usage per week
+      const { data: usageRecords, error: usageError } = await supabase
+        .from('pass_usage')
+        .select('*')
+        .gte('used_at', startDate.toISOString())
+        .lte('used_at', endDate.toISOString());
+
+      if (usageError) throw usageError;
+
+      const totalWeeks = Math.ceil((endDate.getTime() - startDate.getTime()) / (7 * 24 * 60 * 60 * 1000));
+      const averageUsagePerWeek = usageRecords ? Math.round(usageRecords.length / totalWeeks) : 0;
+
+      // Calculate usage by type
+      const usageByType = passes.reduce((acc: { [key: string]: number }, pass) => {
+        acc[pass.type] = (acc[pass.type] || 0) + 1;
+        return acc;
+      }, {});
+
+      const usageByTypeArray = Object.entries(usageByType)
+        .map(([type, count]) => ({
+          type,
+          count
+        }));
 
       return {
-        activeDayPasses,
-        activeTenDayPasses,
-        usageByDay,
-        totalRevenue: (activeDayPasses + activeTenDayPasses) * 100, // Assuming $100 per pass
-        averageUsageRate: 85 // Default value
+        totalPasses,
+        activePasses,
+        averageUsagePerWeek,
+        usageByType: usageByTypeArray
       };
     } catch (error) {
       console.error('Failed to fetch pass usage metrics:', error);
-      throw error;
+      return {
+        totalPasses: 0,
+        activePasses: 0,
+        averageUsagePerWeek: 0,
+        usageByType: []
+      };
     }
   }
 };

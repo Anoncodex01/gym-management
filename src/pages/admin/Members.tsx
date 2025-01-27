@@ -1,12 +1,23 @@
 import React, { useState, useEffect } from 'react';
 import { Search, Filter, Plus, X, User } from 'lucide-react';
-import { Card } from '../../components/ui/card';
 import { toast } from 'react-hot-toast';
 import { MemberSignIn } from '../../components/attendance/MemberSignIn';
 import { useDebounce } from '../../hooks/useDebounce';
 import { PaymentRegistrationFlow } from '../../components/payment/PaymentRegistrationFlow';
 import { memberService } from '../../services/member/memberService';
 import { Member } from '../../types/member.types';
+
+type FormErrors = {
+  fullName?: string;
+  email?: string;
+  phoneNumber?: string;
+  gender?: string;
+  birthDate?: string;
+  membershipType?: string;
+  companyName?: string;
+  insuranceCompany?: string;
+  insuranceMemberId?: string;
+}
 
 interface NewMember {
   fullName: string;
@@ -38,7 +49,7 @@ export const MembersPage: React.FC = () => {
     insuranceCompany: '',
     insuranceMemberId: ''
   });
-  const [errors, setErrors] = useState<Partial<NewMember>>({});
+  const [errors, setErrors] = useState<FormErrors>({});
   const [previewImage, setPreviewImage] = useState<string>('');
   const [selectedMember, setSelectedMember] = useState<Member | null>(null);
   const [showViewModal, setShowViewModal] = useState(false);
@@ -99,7 +110,7 @@ export const MembersPage: React.FC = () => {
   }, [debouncedSearchTerm, members]);
 
   const validateForm = () => {
-    const newErrors: Partial<NewMember> = {};
+    const newErrors: FormErrors = {};
     
     if (!newMember.fullName.trim()) {
       newErrors.fullName = 'Full name is required';
@@ -157,7 +168,9 @@ export const MembersPage: React.FC = () => {
         return;
       }
 
-      setNewMember({ ...newMember, profileImage: file });
+      setNewMember(prev => ({ ...prev, profileImage: file }));
+
+      // Create a preview URL for the image
       const reader = new FileReader();
       reader.onloadend = () => {
         setPreviewImage(reader.result as string);
@@ -399,26 +412,36 @@ export const MembersPage: React.FC = () => {
 
       {/* Add Member Modal */}
       {showAddModal && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 overflow-y-auto">
-          <div className="bg-white rounded-lg max-w-2xl w-full p-6 my-8">
-            <div className="flex justify-between items-center mb-6">
-              <h2 className="text-xl font-semibold">Add New Member</h2>
-              <button 
-                onClick={() => setShowAddModal(false)}
-                className="text-gray-400 hover:text-gray-500"
-              >
-                <X className="w-5 h-5" />
-              </button>
-            </div>
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-lg max-w-2xl w-full max-h-[90vh] overflow-y-auto">
+            <div className="p-6">
+              <div className="flex justify-between items-center mb-6">
+                <h2 className="text-2xl font-bold">Add New Member</h2>
+                <button
+                  onClick={() => {
+                    setShowAddModal(false);
+                    setNewMember({
+                      fullName: '',
+                      phoneNumber: '',
+                      email: '',
+                      membershipType: 'single',
+                      insuranceStatus: false,
+                      insuranceCompany: '',
+                      insuranceMemberId: ''
+                    });
+                    setPreviewImage('');
+                    setErrors({});
+                  }}
+                  className="text-gray-500 hover:text-gray-700"
+                >
+                  <X className="h-6 w-6" />
+                </button>
+              </div>
 
-            <form onSubmit={handleSubmit} className="space-y-6">
-              {/* Profile Image Upload */}
-              <div className="bg-gray-50 p-6 rounded-lg">
-                <label className="block text-sm font-medium text-gray-700 mb-1">
-                  Profile Image
-                </label>
-                <div className="flex items-center space-x-4">
-                  <div className="w-24 h-24 rounded-full bg-gray-100 flex items-center justify-center overflow-hidden border-4 border-white shadow-lg">
+              <form onSubmit={handleSubmit} className="space-y-6">
+                {/* Profile Image Upload */}
+                <div className="flex flex-col items-center space-y-4">
+                  <div className="relative w-32 h-32 rounded-full overflow-hidden bg-gray-100">
                     {previewImage ? (
                       <img
                         src={previewImage}
@@ -426,279 +449,290 @@ export const MembersPage: React.FC = () => {
                         className="w-full h-full object-cover"
                       />
                     ) : (
-                      <User className="w-10 h-10 text-gray-400" />
+                      <div className="w-full h-full flex items-center justify-center">
+                        <User className="w-16 h-16 text-gray-400" />
+                      </div>
                     )}
                   </div>
                   <div>
-                    <input
-                      type="file"
-                      accept="image/*"
-                      onChange={handleImageChange}
-                      className="hidden"
-                      id="profile-image"
-                    />
-                    <label
-                      htmlFor="profile-image"
-                      className="px-4 py-2 bg-blue-50 text-blue-600 rounded-md hover:bg-blue-100 cursor-pointer inline-block transition-colors duration-200"
-                    >
-                      Choose Image
+                    <label className="cursor-pointer bg-blue-600 text-white px-4 py-2 rounded-md hover:bg-blue-700">
+                      <span>Upload Photo</span>
+                      <input
+                        type="file"
+                        accept="image/*"
+                        onChange={handleImageChange}
+                        className="hidden"
+                      />
                     </label>
                   </div>
                 </div>
-              </div>
 
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">
-                    Full Name *
-                  </label>
-                  <input
-                    type="text"
-                    value={newMember.fullName}
-                    onChange={(e) => setNewMember({ ...newMember, fullName: e.target.value })}
-                    className={`w-full px-3 py-2 border rounded-md ${
-                      errors.fullName ? 'border-red-500' : 'border-gray-300'
-                    }`}
-                  />
-                  {errors.fullName && (
-                    <p className="mt-1 text-sm text-red-500">{errors.fullName}</p>
-                  )}
-                </div>
-
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">
-                    Email Address *
-                  </label>
-                  <input
-                    type="email"
-                    value={newMember.email}
-                    onChange={(e) => setNewMember({ ...newMember, email: e.target.value })}
-                    className={`w-full px-3 py-2 border rounded-md ${
-                      errors.email ? 'border-red-500' : 'border-gray-300'
-                    }`}
-                  />
-                  {errors.email && (
-                    <p className="mt-1 text-sm text-red-500">{errors.email}</p>
-                  )}
-                </div>
-
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">
-                    Phone Number *
-                  </label>
-                  <input
-                    type="tel"
-                    value={newMember.phoneNumber}
-                    onChange={(e) => setNewMember({ ...newMember, phoneNumber: e.target.value })}
-                    className={`w-full px-3 py-2 border rounded-md ${
-                      errors.phoneNumber ? 'border-red-500' : 'border-gray-300'
-                    }`}
-                  />
-                  {errors.phoneNumber && (
-                    <p className="mt-1 text-sm text-red-500">{errors.phoneNumber}</p>
-                  )}
-                </div>
-
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">
-                    Gender *
-                  </label>
-                  <select
-                    value={newMember.gender || ''}
-                    onChange={(e) => setNewMember({ 
-                      ...newMember, 
-                      gender: e.target.value as 'male' | 'female' | 'other' | undefined 
-                    })}
-                    className="w-full px-3 py-2 border border-gray-300 rounded-md"
-                  >
-                    <option value="">Select gender</option>
-                    <option value="male">Male</option>
-                    <option value="female">Female</option>
-                    <option value="other">Other</option>
-                  </select>
-                  {errors.gender && (
-                    <p className="mt-1 text-sm text-red-500">{errors.gender}</p>
-                  )}
-                </div>
-
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">
-                    Birth Date *
-                  </label>
-                  <input
-                    type="date"
-                    value={newMember.birthDate || ''}
-                    onChange={(e) => setNewMember({ ...newMember, birthDate: e.target.value })}
-                    className={`w-full px-3 py-2 border rounded-md ${
-                      errors.birthDate ? 'border-red-500' : 'border-gray-300'
-                    }`}
-                  />
-                  {errors.birthDate && (
-                    <p className="mt-1 text-sm text-red-500">{errors.birthDate}</p>
-                  )}
-                </div>
-
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">
-                    Address (Optional)
-                  </label>
-                  <textarea
-                    value={newMember.address || ''}
-                    onChange={(e) => setNewMember({ ...newMember, address: e.target.value })}
-                    rows={1}
-                    className="w-full px-3 py-2 border border-gray-300 rounded-md"
-                  />
-                </div>
-              </div>
-
-              {/* Membership Type Selection */}
-              <div className="bg-gray-50 p-6 rounded-lg">
-                <h3 className="text-sm font-medium text-gray-700 mb-4">Membership Type *</h3>
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                  {membershipTypes.map((membership) => (
-                    <div
-                      key={membership.type}
-                      className={`border rounded-lg p-4 cursor-pointer transition-colors duration-200 ${
-                        newMember.membershipType === membership.type
-                          ? 'border-blue-500 bg-blue-50'
-                          : 'border-gray-200 hover:border-blue-200'
-                      }`}
-                      onClick={() => setNewMember({
-                        ...newMember,
-                        membershipType: membership.type as 'single' | 'couple' | 'corporate'
-                      })}
-                    >
-                      <div className="flex items-center mb-2">
-                        <input
-                          type="radio"
-                          checked={newMember.membershipType === membership.type}
-                          onChange={() => {}}
-                          className="h-4 w-4 text-blue-600"
-                        />
-                        <span className="ml-2 font-medium">{membership.name}</span>
-                      </div>
-                      <p className="text-sm text-gray-500">{membership.description}</p>
-                    </div>
-                  ))}
-                </div>
-                {errors.membershipType && (
-                  <p className="mt-2 text-sm text-red-500">{errors.membershipType}</p>
-                )}
-              </div>
-
-              {/* Company Name for Corporate Membership */}
-              {newMember.membershipType === 'corporate' && (
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">
-                    Company Name *
-                  </label>
-                  <input
-                    type="text"
-                    value={newMember.companyName || ''}
-                    onChange={(e) => setNewMember({
-                      ...newMember,
-                      companyName: e.target.value
-                    })}
-                    className={`w-full px-3 py-2 border rounded-md ${
-                      errors.companyName ? 'border-red-500' : 'border-gray-300'
-                    }`}
-                    placeholder="Enter company name"
-                  />
-                  {errors.companyName && (
-                    <p className="mt-1 text-sm text-red-500">{errors.companyName}</p>
-                  )}
-                </div>
-              )}
-
-              {/* Insurance Information */}
-              <div className="bg-gray-50 p-6 rounded-lg">
-                <div className="w-full">
-                  <div className="flex items-center mb-4">
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">
+                      Full Name *
+                    </label>
                     <input
-                      type="checkbox"
-                      checked={newMember.insuranceStatus}
+                      type="text"
+                      value={newMember.fullName}
+                      onChange={(e) => setNewMember({ ...newMember, fullName: e.target.value })}
+                      className={`w-full px-3 py-2 border rounded-md ${
+                        errors.fullName ? 'border-red-500' : 'border-gray-300'
+                      }`}
+                    />
+                    {errors.fullName && (
+                      <p className="mt-1 text-sm text-red-500">{errors.fullName}</p>
+                    )}
+                  </div>
+
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">
+                      Email Address *
+                    </label>
+                    <input
+                      type="email"
+                      value={newMember.email}
+                      onChange={(e) => setNewMember({ ...newMember, email: e.target.value })}
+                      className={`w-full px-3 py-2 border rounded-md ${
+                        errors.email ? 'border-red-500' : 'border-gray-300'
+                      }`}
+                    />
+                    {errors.email && (
+                      <p className="mt-1 text-sm text-red-500">{errors.email}</p>
+                    )}
+                  </div>
+
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">
+                      Phone Number *
+                    </label>
+                    <input
+                      type="tel"
+                      value={newMember.phoneNumber}
+                      onChange={(e) => setNewMember({ ...newMember, phoneNumber: e.target.value })}
+                      className={`w-full px-3 py-2 border rounded-md ${
+                        errors.phoneNumber ? 'border-red-500' : 'border-gray-300'
+                      }`}
+                    />
+                    {errors.phoneNumber && (
+                      <p className="mt-1 text-sm text-red-500">{errors.phoneNumber}</p>
+                    )}
+                  </div>
+
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">
+                      Gender *
+                    </label>
+                    <select
+                      value={newMember.gender || ''}
+                      onChange={(e) => setNewMember({ 
+                        ...newMember, 
+                        gender: e.target.value as 'male' | 'female' | 'other' | undefined 
+                      })}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-md"
+                    >
+                      <option value="">Select gender</option>
+                      <option value="male">Male</option>
+                      <option value="female">Female</option>
+                      <option value="other">Other</option>
+                    </select>
+                    {errors.gender && (
+                      <p className="mt-1 text-sm text-red-500">{errors.gender}</p>
+                    )}
+                  </div>
+
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">
+                      Birth Date *
+                    </label>
+                    <input
+                      type="date"
+                      value={newMember.birthDate || ''}
+                      onChange={(e) => setNewMember({ ...newMember, birthDate: e.target.value })}
+                      className={`w-full px-3 py-2 border rounded-md ${
+                        errors.birthDate ? 'border-red-500' : 'border-gray-300'
+                      }`}
+                    />
+                    {errors.birthDate && (
+                      <p className="mt-1 text-sm text-red-500">{errors.birthDate}</p>
+                    )}
+                  </div>
+
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">
+                      Address (Optional)
+                    </label>
+                    <textarea
+                      value={newMember.address || ''}
+                      onChange={(e) => setNewMember({ ...newMember, address: e.target.value })}
+                      rows={1}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-md"
+                    />
+                  </div>
+                </div>
+
+                {/* Membership Type Selection */}
+                <div className="bg-gray-50 p-6 rounded-lg">
+                  <h3 className="text-sm font-medium text-gray-700 mb-4">Membership Type *</h3>
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                    {membershipTypes.map((membership) => (
+                      <div
+                        key={membership.type}
+                        className={`border rounded-lg p-4 cursor-pointer transition-colors duration-200 ${
+                          newMember.membershipType === membership.type
+                            ? 'border-blue-500 bg-blue-50'
+                            : 'border-gray-200 hover:border-blue-200'
+                        }`}
+                        onClick={() => setNewMember({
+                          ...newMember,
+                          membershipType: membership.type as 'single' | 'couple' | 'corporate'
+                        })}
+                      >
+                        <div className="flex items-center mb-2">
+                          <input
+                            type="radio"
+                            checked={newMember.membershipType === membership.type}
+                            onChange={() => {}}
+                            className="h-4 w-4 text-blue-600"
+                          />
+                          <span className="ml-2 font-medium">{membership.name}</span>
+                        </div>
+                        <p className="text-sm text-gray-500">{membership.description}</p>
+                      </div>
+                    ))}
+                  </div>
+                  {errors.membershipType && (
+                    <p className="mt-2 text-sm text-red-500">{errors.membershipType}</p>
+                  )}
+                </div>
+
+                {/* Company Name for Corporate Membership */}
+                {newMember.membershipType === 'corporate' && (
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">
+                      Company Name *
+                    </label>
+                    <input
+                      type="text"
+                      value={newMember.companyName || ''}
                       onChange={(e) => setNewMember({
                         ...newMember,
-                        insuranceStatus: e.target.checked,
-                        insuranceCompany: e.target.checked ? newMember.insuranceCompany : '',
-                        insuranceMemberId: e.target.checked ? newMember.insuranceMemberId : ''
+                        companyName: e.target.value
                       })}
-                      className="h-4 w-4 text-blue-600 rounded"
+                      className={`w-full px-3 py-2 border rounded-md ${
+                        errors.companyName ? 'border-red-500' : 'border-gray-300'
+                      }`}
+                      placeholder="Enter company name"
                     />
-                    <label className="ml-2 text-sm text-gray-700">
-                      Member has health insurance
-                    </label>
+                    {errors.companyName && (
+                      <p className="mt-1 text-sm text-red-500">{errors.companyName}</p>
+                    )}
                   </div>
+                )}
 
-                  {newMember.insuranceStatus && (
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                      <div>
-                        <label className="block text-sm font-medium text-gray-700 mb-1">
-                          Insurance Company *
-                        </label>
-                        <select
-                          value={newMember.insuranceCompany}
-                          onChange={(e) => setNewMember({
-                            ...newMember,
-                            insuranceCompany: e.target.value
-                          })}
-                          className={`w-full px-3 py-2 border rounded-md ${
-                            errors.insuranceCompany ? 'border-red-500' : 'border-gray-300'
-                          }`}
-                        >
-                          <option value="">Select insurance company</option>
-                          {insuranceCompanies.map(company => (
-                            <option key={company.id} value={company.id}>
-                              {company.name}
-                            </option>
-                          ))}
-                        </select>
-                        {errors.insuranceCompany && (
-                          <p className="mt-1 text-sm text-red-500">{errors.insuranceCompany}</p>
-                        )}
-                      </div>
-
-                      <div>
-                        <label className="block text-sm font-medium text-gray-700 mb-1">
-                          Insurance Member ID *
-                        </label>
-                        <input
-                          type="text"
-                          value={newMember.insuranceMemberId}
-                          onChange={(e) => setNewMember({
-                            ...newMember,
-                            insuranceMemberId: e.target.value
-                          })}
-                          className={`w-full px-3 py-2 border rounded-md ${
-                            errors.insuranceMemberId ? 'border-red-500' : 'border-gray-300'
-                          }`}
-                          placeholder="Enter insurance member ID"
-                        />
-                        {errors.insuranceMemberId && (
-                          <p className="mt-1 text-sm text-red-500">{errors.insuranceMemberId}</p>
-                        )}
-                      </div>
+                {/* Insurance Information */}
+                <div className="bg-gray-50 p-6 rounded-lg">
+                  <div className="w-full">
+                    <div className="flex items-center mb-4">
+                      <input
+                        type="checkbox"
+                        checked={newMember.insuranceStatus}
+                        onChange={(e) => setNewMember({
+                          ...newMember,
+                          insuranceStatus: e.target.checked,
+                          insuranceCompany: e.target.checked ? newMember.insuranceCompany : '',
+                          insuranceMemberId: e.target.checked ? newMember.insuranceMemberId : ''
+                        })}
+                        className="h-4 w-4 text-blue-600 rounded"
+                      />
+                      <label className="ml-2 text-sm text-gray-700">
+                        Member has health insurance
+                      </label>
                     </div>
-                  )}
-                </div>
-              </div>
 
-              <div className="flex justify-end space-x-3 pt-6 border-t">
-                <button
-                  type="button"
-                  onClick={() => setShowAddModal(false)}
-                  className="px-6 py-2 text-gray-700 hover:bg-gray-50 rounded-md transition-colors duration-200"
-                >
-                  Cancel
-                </button>
-                <button
-                  type="submit"
-                  className="px-6 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 transition-colors duration-200"
-                >
-                  Add Member
-                </button>
-              </div>
-            </form>
+                    {newMember.insuranceStatus && (
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                        <div>
+                          <label className="block text-sm font-medium text-gray-700 mb-1">
+                            Insurance Company *
+                          </label>
+                          <select
+                            value={newMember.insuranceCompany}
+                            onChange={(e) => setNewMember({
+                              ...newMember,
+                              insuranceCompany: e.target.value
+                            })}
+                            className={`w-full px-3 py-2 border rounded-md ${
+                              errors.insuranceCompany ? 'border-red-500' : 'border-gray-300'
+                            }`}
+                          >
+                            <option value="">Select insurance company</option>
+                            {insuranceCompanies.map(company => (
+                              <option key={company.id} value={company.id}>
+                                {company.name}
+                              </option>
+                            ))}
+                          </select>
+                          {errors.insuranceCompany && (
+                            <p className="mt-1 text-sm text-red-500">{errors.insuranceCompany}</p>
+                          )}
+                        </div>
+
+                        <div>
+                          <label className="block text-sm font-medium text-gray-700 mb-1">
+                            Insurance Member ID *
+                          </label>
+                          <input
+                            type="text"
+                            value={newMember.insuranceMemberId}
+                            onChange={(e) => setNewMember({
+                              ...newMember,
+                              insuranceMemberId: e.target.value
+                            })}
+                            className={`w-full px-3 py-2 border rounded-md ${
+                              errors.insuranceMemberId ? 'border-red-500' : 'border-gray-300'
+                            }`}
+                            placeholder="Enter insurance member ID"
+                          />
+                          {errors.insuranceMemberId && (
+                            <p className="mt-1 text-sm text-red-500">{errors.insuranceMemberId}</p>
+                          )}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                <div className="flex justify-end space-x-3 pt-6 border-t">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setShowAddModal(false);
+                      setNewMember({
+                        fullName: '',
+                        phoneNumber: '',
+                        email: '',
+                        membershipType: 'single',
+                        insuranceStatus: false,
+                        insuranceCompany: '',
+                        insuranceMemberId: ''
+                      });
+                      setPreviewImage('');
+                      setErrors({});
+                    }}
+                    className="px-6 py-2 text-gray-700 hover:bg-gray-50 rounded-md transition-colors duration-200"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="submit"
+                    className="px-6 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 transition-colors duration-200"
+                  >
+                    Add Member
+                  </button>
+                </div>
+              </form>
+            </div>
           </div>
         </div>
       )}
@@ -753,9 +787,6 @@ export const MembersPage: React.FC = () => {
                   <p className="font-medium capitalize">{viewMember.membershipType}</p>
                 </div>
                 <div>
-                 Continuing the Members.tsx file content exactly where we left off:
-
-```
                   <p className="text-sm text-gray-500">Status</p>
                   <span className={`px-2 py-1 text-xs font-semibold rounded-full ${
                     viewMember.status === 'active'
@@ -852,7 +883,7 @@ export const MembersPage: React.FC = () => {
                 <X className="w-5 h-5" />
               </button>
             </div>
-            <PaymentRegistrationFlow onPaymentComplete={handlePaymentComplete} />
+            <PaymentRegistrationFlow member={selectedMember} onComplete={handlePaymentComplete} />
           </div>
         </div>
       )}

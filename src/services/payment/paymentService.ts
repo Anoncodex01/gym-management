@@ -1,120 +1,220 @@
-import { PaymentIntent, PaymentMethod } from '../../types/payment.types';
-import { billingConfig } from './billingConfig';
+import { supabase } from '../supabaseClient';
+
+interface PaymentRequest {
+  memberId: string;
+  amount: number;
+  subscription: {
+    type: 'monthly' | 'semi-annually' | 'annually';
+    startDate: string;
+    endDate: string;
+    status: 'active' | 'pending' | 'expired';
+  };
+}
+
+interface PaymentResponse {
+  success: boolean;
+  orderId: string;
+  status: string;
+  message: string;
+  paymentUrl?: string;
+}
+
+const ZENO_API_URL = 'https://api.zeno.africa';
+const ZENO_API_URL_ORDER_STATUS = 'https://api.zeno.africa/order-status';
+
+// Get environment variables
+const ACCOUNT_ID = import.meta.env.VITE_ZENO_PAY_ACCOUNT_ID;
+const API_KEY = import.meta.env.VITE_ZENO_PAY_API_KEY;
+const SECRET_KEY = import.meta.env.VITE_ZENO_PAY_SECRET_KEY;
+
+// Validate required configuration
+if (!ACCOUNT_ID) {
+  throw new Error('VITE_ZENO_PAY_ACCOUNT_ID is required');
+}
 
 export const paymentService = {
-  // Create payment intent for one-time payments
-  createPaymentIntent: async (
-    amount: number,
-    phoneNumber?: string,
-    email?: string
-  ): Promise<PaymentIntent> => {
-    const response = await fetch('/api/payments/create-intent', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        amount,
-        currency: 'TZS',
-        phoneNumber,
-        email
-      }),
-    });
-    const data = await response.json();
-    return data;
+  async getMemberDetails(memberId: string) {
+    const { data: member, error } = await supabase
+      .from('members')
+      .select('*')
+      .eq('id', memberId)
+      .single();
+
+    if (error) throw error;
+    if (!member) throw new Error('Member not found');
+
+    return member;
   },
 
-  // Set up recurring billing
-  setupRecurringBilling: async (
-    membershipType: 'single' | 'couple' | 'corporate',
-    frequency: string,
-    hasInsurance: boolean,
-    phoneNumber?: string,
-    email?: string
-  ): Promise<PaymentIntent> => {
-    // Calculate price based on membership type, frequency, and insurance status
-    const basePrice = billingConfig.basePrice[membershipType];
-    const selectedFrequency = billingConfig.frequencies.find(f => f.type === frequency);
-    
-    if (!selectedFrequency) {
-      throw new Error('Invalid billing frequency');
-    }
-
-    let finalPrice = basePrice;
-    
-    // Apply frequency discount
-    finalPrice = finalPrice * (1 - selectedFrequency.discountPercentage / 100);
-    
-    // Apply insurance discount if applicable
-    if (hasInsurance) {
-      finalPrice = finalPrice * (1 - billingConfig.insuranceDiscount / 100);
-    }
-
-    // Calculate total amount for the billing period
-    const totalAmount = finalPrice * selectedFrequency.monthsInterval;
-
-    const response = await fetch('/api/payments/setup-recurring', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        amount: totalAmount,
-        currency: 'TZS',
-        frequency: selectedFrequency.type,
-        membershipType,
-        hasInsurance,
-        phoneNumber,
-        email
-      }),
-    });
-    return response.json();
-  },
-
-  // Get payment methods for a user
-  getPaymentMethods: async (userId: string): Promise<PaymentMethod[]> => {
-    const response = await fetch(`/api/payments/methods/${userId}`);
-    return response.json();
-  },
-
-  // Send payment link via SMS or email
-  sendPaymentLink: async (
-    paymentId: string,
-    contact: { type: 'sms' | 'email'; value: string }
-  ): Promise<void> => {
-    await fetch('/api/payments/send-link', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        paymentId,
-        contactType: contact.type,
-        contactValue: contact.value
-      }),
-    });
-  },
-
-  // Update payment status
-  async updatePaymentStatus(params: {
-    orderId: string;
-    status: 'pending' | 'succeeded' | 'failed';
-    paymentMethod: string;
-    transactionId: string;
-  }): Promise<void> {
+  async processPayment(paymentDetails: PaymentRequest): Promise<PaymentResponse> {
     try {
-      const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/api/payments/${params.orderId}`, {
-        method: 'PATCH',
-        headers: {
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({
-          status: params.status,
-          paymentMethod: params.paymentMethod,
-          transactionId: params.transactionId
-        })
+      // Get member details
+      const member = await this.getMemberDetails(paymentDetails.memberId);
+      
+      // Format phone number
+      let formattedPhone = member.phone_number.trim();
+      formattedPhone = formattedPhone.replace(/^0+/, ''); // Remove leading zeros
+      formattedPhone = formattedPhone.replace(/[^0-9]/g, ''); // Remove non-numeric characters
+      formattedPhone = formattedPhone.startsWith('255') ? formattedPhone : `255${formattedPhone}`;
+
+      // Validate phone number format
+      if (!formattedPhone.match(/^255\d{9}$/)) {
+        throw new Error('Invalid phone number format. Please use format: +255XXXXXXXXX');
+      }
+
+      // Prepare form data for Zeno API
+      const formData = new URLSearchParams({
+        buyer_name: member.full_name,
+        buyer_email: member.email,
+        buyer_phone: formattedPhone,
+        amount: Math.round(paymentDetails.amount).toString(),
+        account_id: ACCOUNT_ID,
+        api_key: API_KEY || 'NULL',
+        secret_key: SECRET_KEY || 'NULL'
       });
 
-      if (!response.ok) {
-        throw new Error('Failed to update payment status');
+      // First API call to create order
+      const response = await fetch(ZENO_API_URL, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/x-www-form-urlencoded',
+          'Accept': 'application/json',
+          'Access-Control-Allow-Origin': '*',
+          'Access-Control-Allow-Methods': 'POST, GET, OPTIONS',
+          'Access-Control-Allow-Headers': 'Content-Type'
+        },
+        body: formData,
+        mode: 'cors'
+      });
+
+      const responseData = await response.json();
+
+      if (!response.ok || !responseData.success) {
+        throw new Error(responseData?.message || 'Failed to create payment order');
       }
+
+      // Get order ID from Zeno response
+      const orderId = responseData.order_id;
+
+      // Create payment record in database
+      const { error: dbError } = await supabase
+        .from('payments')
+        .insert([{
+          order_id: orderId,
+          member_id: paymentDetails.memberId,
+          amount: paymentDetails.amount,
+          membership_type: paymentDetails.subscription.type,
+          payment_status: 'PENDING',
+          created_at: new Date().toISOString()
+        }]);
+
+      if (dbError) throw dbError;
+
+      // Wait for 5 seconds before checking status
+      await new Promise(resolve => setTimeout(resolve, 5000));
+
+      // Check payment status
+      const statusFormData = new URLSearchParams({
+        check_status: '1',
+        order_id: orderId,
+        api_key: API_KEY || 'NULL',
+        secret_key: SECRET_KEY || 'NULL'
+      });
+
+      const statusResponse = await fetch(ZENO_API_URL_ORDER_STATUS, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/x-www-form-urlencoded',
+          'Accept': 'application/json',
+          'Access-Control-Allow-Origin': '*',
+          'Access-Control-Allow-Methods': 'POST, GET, OPTIONS',
+          'Access-Control-Allow-Headers': 'Content-Type'
+        },
+        body: statusFormData,
+        mode: 'cors'
+      });
+
+      const statusData = await statusResponse.json();
+
+      if (!statusResponse.ok) {
+        throw new Error(statusData?.message || 'Failed to check payment status');
+      }
+
+      // Update payment status in database
+      await supabase
+        .from('payments')
+        .update({
+          payment_status: statusData.payment_status || 'PENDING',
+          updated_at: new Date().toISOString()
+        })
+        .eq('order_id', orderId);
+
+      return {
+        success: true,
+        orderId,
+        status: statusData.payment_status || 'PENDING',
+        message: responseData.message || 'Payment initialized successfully',
+        paymentUrl: responseData.payment_url
+      };
+
     } catch (error) {
-      console.error('Error updating payment status:', error);
-      throw error;
+      console.error('Payment processing error:', error);
+      return {
+        success: false,
+        orderId: '',
+        status: 'FAILED',
+        message: error instanceof Error ? error.message : 'Payment processing failed'
+      };
     }
   },
+
+  async checkPaymentStatus(orderId: string): Promise<{ status: string; message: string }> {
+    try {
+      const formData = new URLSearchParams({
+        check_status: '1',
+        order_id: orderId,
+        api_key: API_KEY || 'NULL',
+        secret_key: SECRET_KEY || 'NULL'
+      });
+
+      const response = await fetch(ZENO_API_URL_ORDER_STATUS, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/x-www-form-urlencoded',
+          'Accept': 'application/json',
+          'Access-Control-Allow-Origin': '*',
+          'Access-Control-Allow-Methods': 'POST, GET, OPTIONS',
+          'Access-Control-Allow-Headers': 'Content-Type'
+        },
+        body: formData,
+        mode: 'cors'
+      });
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data?.message || 'Failed to check payment status');
+      }
+
+      // Update payment status in database
+      await supabase
+        .from('payments')
+        .update({
+          payment_status: data.payment_status || 'PENDING',
+          updated_at: new Date().toISOString()
+        })
+        .eq('order_id', orderId);
+
+      return {
+        status: data.payment_status || 'PENDING',
+        message: data.message || 'Payment status check completed'
+      };
+    } catch (error) {
+      console.error('Error checking payment status:', error);
+      return {
+        status: 'ERROR',
+        message: error instanceof Error ? error.message : 'Failed to check payment status'
+      };
+    }
+  }
 };
